@@ -1,0 +1,998 @@
+-- all prols + вид задолженности + ДС Выходного дня --примерная продолжительность на 4 месяца=60 сек  + выгрузка занимает=60 сек --1
+--17.04.2024 новая выгрузка продолжительность 6 минут 20 сек выгрузка = <5 минут
+WITH
+--ДС выходного дня Версия 2.0
+HOLIDAYS AS(
+select c_date_hw
+from z#shb_Holidays
+where
+c_calendar_name='HOLIDAYS'),
+
+PrevNew as (SELECT
+prol.id,
+COUNT(CAPP.C_NEW_POINT)+COUNT(CAPP.C_PREV_POINT) PrevNew
+   FROM z#pr_cred cr,
+   z#prol_contract prol,
+        z#CR_AGR_PR_DEBT CAPD,
+        z#CR_AGR_PR_POINT CAPP
+   WHERE
+      prol.collection_id = cr.c_list_prol
+       AND CAPD.C_PROL=prol.id
+       AND CAPD.C_POINTS=CAPP.COLLECTION_ID
+        group by prol.id),
+DSHOLIDAY as(
+SELECT DISTINCT cr.id as cr_id,
+                   cr.c_num_dog,
+                   br.c_code,
+                   prol.c_SHB_CR_RT_DATE,
+                   cr_stat.c_NAME as cr_st,
+                   prol.id as "ID_ДС",
+                   prol.c_num_prol,
+                   prol_stat.c_NAME as prol_st,
+                   prol.C_ADD_AGREEMENT,
+                   prol.C_CORRECTION,
+                   prol.C_CHANGES,
+                   prol.C_PROL_BEGIN,
+                   prol.c_PROL_END,
+                   prol.c_LAST_DATE_ENDING,
+                   prol.c_SHB_CR_RT_KIND,
+                   prol.c_LIST_TUNE_STEPS
+                   --COUNT(CAPP.C_NEW_POINT) + COUNT(CAPP.C_PREV_POINT) PrevNew
+                  --PRP.C_NEW_DATE,
+                  --PRP.C_OLD_DATE,
+                   --to_char ( PRP.C_OLD_DATE, 'D')
+                  --to_char ( PRP.C_NEW_DATE, 'D')
+   FROM z#pr_cred cr,
+        z#product p,
+        z#branch br,
+        z#com_status_prd cr_stat,
+        z#com_status_prd prol_stat,
+        --z#PR_POINT PRPNew,
+		--z#PR_POINT PRPPrev,
+        PrevNew PN,
+        z#prol_contract prol,
+        z#CR_AGR_PR_DEBT CAPD,
+        z#CR_AGR_PR_POINT CAPP
+        LEFT JOIN z#PR_POINT PRPNew ON CAPP.C_NEW_POINT=prpNew.id
+		LEFT JOIN z#PR_POINT PRPPrev ON CAPP.C_PREV_POINT=prpPrev.id
+
+		--LEFT JOIN z#CR_AGR_CH_PR_SCH AGR ON AGR.Collection_id=prol.C_CH_PRC_SCHEMES
+       --LEFT JOIN z#VID_DEBT VDE ON AGR.C_DEBT=VDE.ID
+   WHERE cr.id = p.id
+     AND cr.c_filial = br.id
+     and PN.id=prol.id
+
+     AND (p.c_date_close IS NULL
+          OR p.c_date_close > prol.c_SHB_CR_RT_DATE)
+           AND PrevNew <3
+
+		            AND(to_date (PRPNew.C_OLD_DATE)IN (select c_date_hw
+from HOLIDAYS)
+		  OR (PRPNew.C_OLD_DATE is null and to_date (PRPPrev.C_NEW_DATE) IN(select c_date_hw
+from HOLIDAYS))
+          OR (PRPNew.C_KIND=6 and (PRPNew.C_NEW_DATE)IN (select c_date_hw
+from HOLIDAYS))
+)
+
+
+     AND prol.collection_id = cr.c_list_prol
+     AND p.c_COM_STATUS = cr_stat.id
+     AND prol.c_COM_STATUS = prol_stat.id
+     AND prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+     AND prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+       AND CAPD.C_PROL=prol.id
+	 AND (PRPNew.C_OLD_DATE between to_date('01/05/2025') and to_date('01/06/2025')
+	 OR (PRPNew.C_OLD_DATE is null and PRPPrev.C_NEW_DATE between to_date('01/05/2025') and to_date('01/06/2025'))
+     OR (PRPNew.C_KIND=6 and PRPNew.C_NEW_DATE between to_date('01/05/2025') and to_date('01/06/2025'))
+     )
+AND CAPD.C_POINTS=CAPP.COLLECTION_ID
+
+     GROUP BY cr.id,
+                   cr.c_num_dog,
+                   br.c_code,
+                   prol.c_SHB_CR_RT_DATE,
+                   cr_stat.c_NAME,
+                   prol.id,
+                   prol.c_num_prol,
+                   prol_stat.c_NAME ,
+                   prol.C_ADD_AGREEMENT,
+                   prol.C_CORRECTION,
+                   prol.C_CHANGES,
+                   prol.C_PROL_BEGIN,
+                   prol.c_PROL_END,
+                   prol.c_LAST_DATE_ENDING,
+                   prol.c_SHB_CR_RT_KIND,
+                   prol.c_LIST_TUNE_STEPS),
+
+DOSROCH as (
+SELECT DISTINCT
+cr.ID ID_КД
+,MAX(prol.id) ID_ДС
+,MAX(prol.C_PROL_BEGIN) as C_PROL_BEGIN
+FROM z#PR_crED cr
+INNER JOIN z#BRANCH BRANCH ON BRANCH.id=cr.c_filial
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#COM_STATUS_PRD csprd ON C_COM_STATUS=csprd.id
+WHERE
+prol.C_NOTE like '%Заявка на досрочное погашение%'
+--AND prol.C_PROL_BEGIN >=to_date('01/05/2025')
+--and prol.C_PROL_BEGIN < to_date('01/06/2025')
+GROUP BY
+cr.ID
+),
+
+
+
+
+
+-- Ограничение 1
+Ogr1OtsrGash as (
+SELECT DISTINCT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,BRANCH.c_code Код_филиала
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,csprd.C_NAME Cтатус_ДC--2047879 это статус работает
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+,PFR.C_PAY_BEGIN_DATE Дата_начала_гашений
+,PFR.C_END_DATE Дата_окончания_планирования
+,PFR.C_SHIFT_COUNT Отсрочка_гашения
+,'Отсрочка_гашения'   Вид_Ограничения
+ FROM z#PR_CRED cr
+INNER JOIN z#Properties pr ON pr.Collection_id=cr.C_PROPERTIES
+INNER JOIN z#PARAM_FOR_PLAN PFR ON PFR.Collection_id=cr.C_PARAM_FOR_PLAN
+INNER JOIN z#BRANCH BRANCH ON BRANCH.id=cr.c_filial
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#COM_STATUS_PRD csprd ON C_COM_STATUS=csprd.id
+WHERE PFR.C_SHIFT_COUNT>0
+and prol.c_SHB_CR_RT_DATE >=to_date('01/05/2025')
+and prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+),
+
+
+
+
+
+
+
+
+
+
+
+
+-- Ограничение 2
+Ogr2106PHZ as (
+SELECT DISTINCT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,BRANCH.c_code Код_филиала
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,csprd.C_NAME Cтатус_ДC
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+,'РСХБ. 106-ФЗ'   Вид_Ограничения
+,pr.C_GROUP_PROP
+,pr.C_BOOL
+ FROM z#PR_CRED cr
+INNER JOIN z#Properties pr ON pr.Collection_id=cr.C_PROPERTIES
+INNER JOIN z#BRANCH BRANCH ON BRANCH.id=cr.c_filial
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#COM_STATUS_PRD csprd ON C_COM_STATUS=csprd.id
+WHERE
+pr.C_GROUP_PROP IN (240958589032)
+and prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+and prol.c_SHB_CR_RT_DATE <  to_date('01/06/2025')
+),
+
+-- Ограничение 3
+Ogr3DataStartOfPlaning as (
+SELECT DISTINCT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,BRANCH.c_code Код_филиала
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,csprd.C_NAME Cтатус_ДC
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+,DE.C_PLAN_BEGIN_DATE Дата_начала_планирования
+,VDE.C_NAME вид_задолженности
+,'Дата начала планирования'   Вид_Ограничения
+ FROM z#PR_CRED cr
+INNER JOIN z#Properties pr ON pr.Collection_id=cr.C_PROPERTIES
+--INNER JOIN z#PARAM_FOR_PLAN PFR ON PFR.Collection_id=cr.C_PARAM_FOR_PLAN --С_PR_DEBT
+INNER JOIN z#PR_DEBT De ON DE.Collection_id=cr.C_PR_DEBT
+INNER JOIN z#BRANCH BRANCH ON BRANCH.id=cr.c_filial
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#COM_STATUS_PRD csprd ON C_COM_STATUS=csprd.id
+INNER JOIN z#VID_DEBT VDE ON DE.C_VID_DEBT=VDE.ID
+WHERE DE.C_PLAN_BEGIN_DATE is not null
+and prol.c_SHB_CR_RT_DATE >=to_date('01/05/2025')
+and prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+AND DE.C_PLAN_BEGIN_DATE<prol.C_SHB_CR_RT_DATE
+AND VDE.id IN (1984128,1984121,1984123,29999810,499402255)
+),
+/*
+(select z(z.[PLAN_BEGIN_DATE]) in :: [PR_DEBT] all
+where A.[PR_DEBT] = z%collection(true)
+AND z.[VID_DEBT] IN(1984128,1984121,1984123,29999810,499402255)
+ORDER BY z.[PLAN_BEGIN_DATE] DESC
+ FETCH 1)
+*/
+--(1984128,1984121,1984123,29999810,499402255)
+--Неучтенные проценты за кредит, Проценты на просроченный кредит (112), РСХБ. Комиссия за обсл. кр., РСХБ. Комиссия за резервирование средств, Ссудная задолженность
+-- Ограничение 4
+Ogr4HistoryRulesPlaning as (
+SELECT DISTINCT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,BRANCH.c_code Код_филиала
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,csprd.C_NAME Cтатус_ДC
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+,DE.id id_задолженности
+,DE.Collection_id
+,VDE.C_NAME вид_задолженности
+,ru.c_num номер_планирования
+,ru.id id_планирования
+,'Иcторичность правил планирования'   Вид_Ограничения
+ FROM z#PR_CRED cr
+INNER JOIN z#Properties pr ON pr.Collection_id=cr.C_PROPERTIES
+--INNER JOIN z#PARAM_FOR_PLAN PFR ON PFR.Collection_id=cr.C_PARAM_FOR_PLAN
+INNER JOIN z#PR_DEBT De ON DE.Collection_id=cr.C_PR_DEBT
+INNER JOIN z#BRANCH BRANCH ON BRANCH.id=cr.c_filial
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#COM_STATUS_PRD csprd ON C_COM_STATUS=csprd.id
+INNER JOIN z#PR_RULE RU ON DE.C_RULES=RU.Collection_ID
+INNER JOIN z#VID_DEBT VDE ON DE.C_VID_DEBT=VDE.ID
+WHERE
+prol.c_SHB_CR_RT_DATE >=to_date('01/05/2025')
+and prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+AND RU.C_NUM=2
+),
+-- Ограничение 5
+Ogr5EndofDog as (
+SELECT DISTINCT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,BRANCH.c_code Код_филиала
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,csprd.C_NAME Cтатус_ДC--2047879 это статус работает
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+,DE.id id_задолженности
+,DE.Collection_id
+,VDE.C_NAME вид_задолженности
+,ru.c_num номер_планирования
+,ru.id id_планирования
+,'Конец договора'   Вид_Ограничения
+ FROM z#PR_CRED cr
+INNER JOIN z#Properties pr ON pr.Collection_id=cr.C_PROPERTIES
+INNER JOIN z#PARAM_FOR_PLAN PFR ON PFR.Collection_id=cr.C_PARAM_FOR_PLAN --С_PR_DEBT
+INNER JOIN z#PR_DEBT De ON DE.Collection_id=cr.C_PR_DEBT
+INNER JOIN z#BRANCH BRANCH ON BRANCH.id=cr.c_filial
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#COM_STATUS_PRD csprd ON C_COM_STATUS=csprd.id
+INNER JOIN z#PR_RULE RU ON DE.C_RULES=RU.Collection_ID
+INNER JOIN z#VID_DEBT VDE ON DE.C_VID_DEBT=VDE.ID
+WHERE
+prol.c_SHB_CR_RT_DATE >=to_date('01/05/2025')
+and prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+AND PFR.C_OPER IN (2052510,
+2052204)
+AND RU.C_RULE_DATE=1189638872--код означающий конец договора в таблице z#PR_DATE
+AND VDE.id IN(1984128)
+),
+
+/*CASE WHEN A.[HIGH_LEVEL_CR] is not null then
+CASE WHEN EXISTS(select z(z%collection(true)) in :: [PROPERTIES],
+(::[PR_CRED] all : PR ) all
+where
+PR%ID=A.[HIGH_LEVEL_CR]
+AND PR.[HIGH_LEVEL_CR] is  null
+AND PR.[PROPERTIES] = z%collection(true)
+AND z.[GROUP_PROP]=624458553132)
+Then '№6 График ссудной задолженности' END
+ELSE
+CASE WHEN A.[PROPERTIES] IN (select z(z%collection(true)) in :: [PROPERTIES] all
+where A.[PROPERTIES] = z%collection(true) AND z.[GROUP_PROP]=624458553132)
+Then '№6 График ссудной задолженности' END
+END */
+
+-- Ограничение 6
+OGR6KVU as (
+SELECT DISTINCT
+cr.ID ID_КД
+FROM z#PR_CRED cr
+INNER JOIN z#Properties pr ON pr.Collection_id=cr.C_PROPERTIES
+INNER JOIN z#BRANCH BRANCH ON BRANCH.id=cr.c_filial
+WHERE pr.C_GROUP_PROP=624458553132
+GROUP BY cr.ID
+),
+
+Ogr6GraphSsudDolg as (
+SELECT
+--COUNT(*)
+DISTINCT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,BRANCH.c_code Код_филиала
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,csprd.C_NAME Cтатус_ДC
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+, 'График совокупной ссудной задолженности'   Вид_Ограничения
+ FROM z#PR_CRED cr
+ INNER JOIN OGR6KVU KVU on KVU."ID_КД"=nvl(cr.c_high_level_cr,cr.id)
+ INNER JOIN z#BRANCH BRANCH ON BRANCH.id=cr.c_filial
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#COM_STATUS_PRD csprd ON C_COM_STATUS=csprd.id
+WHERE
+prol.c_SHB_CR_RT_DATE >=to_date('01/05/2025')
+and prol.c_SHB_CR_RT_DATE < to_date('01/06/2025') and prol.C_LIST_TUNE_STEPS not like '^%~ИЗМЕНЕНИЕ_ПРОЦЕНТНЫХ_СТАВОК~1~^%'
+),
+
+
+FACTOPERKAP as(
+SELECT COLLECTION_ID
+FROM z#FACT_OPER
+WHERE C_OPER=774930401598
+GROUP BY COLLECTION_ID),
+
+Ogr7CapitalizedPrec as (
+SELECT DISTINCT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,BRANCH.c_code Код_филиала
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,csprd.C_NAME Cтатус_ДC
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+,'РСХБ. 106-ФЗ'   Вид_Ограничения
+,pr.C_GROUP_PROP  C_GROUP_PROP
+,pr.C_BOOL C_BOOL
+ FROM z#PR_CRED cr
+INNER JOIN z#Properties pr ON pr.Collection_id=cr.C_PROPERTIES
+INNER JOIN z#BRANCH BRANCH ON BRANCH.id=cr.c_filial
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#COM_STATUS_PRD csprd ON C_COM_STATUS=csprd.id
+LEFT JOIN FACTOPERKAP FO ON CR.C_LIST_PAY=FO.COLLECTION_ID
+WHERE pr.C_GROUP_PROP IN (774930401583) AND FO.COLLECTION_ID is not null
+and prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+and prol.c_SHB_CR_RT_DATE <  to_date('01/06/2025')
+),
+
+AGRMIN as(SELECT
+rat.collection_id,
+rat.id,
+arc.C_DATE_BEG,
+arc.C_DATE_END,
+lag(arc.C_DATE_END,1) OVER (PARTITION BY rat.collection_id ORDER BY arc.C_date_end)+1 LASTDATEEND
+FROM z#CR_AGR_RATES rat
+INNER JOIN z#ARC_SCH_PRC arc ON rat.c_rate=arc.id
+INNER JOIN z#CR_AGR_CH_PR_SCH agr ON agr.C_HIST_RATES = rat.Collection_id
+INNER JOIN z#prol_contract prol ON prol.C_CH_PRC_SCHEMES = agr.collection_id
+WHERE rat.C_IS_NEW_RATE=1
+
+--AND prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+--AND prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+
+),
+/*
+
+
+(SELECT prol(1) in :: [PROL_CONTRACT],
+(:: [CR_AGR_CH_PR_SCH] all : agr),
+(:: [CR_AGR_RATES] all : rat),
+(:: [ARC_SCH_PRC] all : arc)
+
+LEFT JOIN (SELECT arc1(rat1%ID : RAT_ID,
+lag(arc1.[DATE_END],1) OVER (PARTITION BY rat%collection(true) ORDER BY arc1.[date_end])+1 : LASTDATEEND
+ ) IN :: [CR_AGR_RATES],
+(:: [CR_AGR_RATES] all : rat1) all
+WHERE
+rat1.C_IS_NEW_RATE=1
+) AM on AM.[RAT_ID] = rat%ID all
+WHERE
+arc.[VAL_SIMPLE_PRC]<>0
+AND arc.[DATE_END] is not null
+AND rat.[IS_NEW_RATE]=1
+AND prol%collection(true) = A.[list_prol]
+AND prol.[CH_PRC_SCHEMES] = agr%collection(true)
+AND agr.[HIST_RATES]= rat%collection(true)
+AND rat.[rate]=arc%id
+AND prol.[SHB_CR_RT_DATE] >=:1
+AND AND AM.[LASTDATEEND]=arc.[DATE_BEG]
+GROUP BY prol%id,agr%id,rat%ID
+HAVING COUNT(DISTINCT(arc.[VAL_SIMPLE_PRC]))>1
+)
+*/
+
+---Ограничение 8
+Ogr8CRAGRRATES as (
+SELECT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+,agr.id ID_AGR
+,COUNT(DISTINCT(arc.C_VAL_SIMPLE_PRC)) Price
+,'Две ставки в истории ставки'   Вид_Ограничения
+FROM z#PR_CRED cr
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#CR_AGR_CH_PR_SCH agr ON prol.C_CH_PRC_SCHEMES = agr.collection_id
+INNER JOIN z#CR_AGR_RATES rat  ON agr.C_HIST_RATES = rat.Collection_id
+INNER JOIN z#ARC_SCH_PRC arc ON rat.c_rate=arc.id
+LEFT JOIN AGRMIN AM ON AM.id = rat.id
+WHERE
+arc.C_VAL_SIMPLE_PRC<>0
+AND arc.C_DATE_END is not null
+AND AM.LASTDATEEND=arc.C_DATE_BEG
+--AND arc.C_DATE_BEG-1 = lag(arc.C_DATE_END,1) OVER (PARTITION BY rat.id)
+AND rat.C_IS_NEW_RATE=1
+AND prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+AND prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+GROUP BY cr.ID
+,cr.C_NUM_DOG
+,prol.c_SHB_CR_RT_DATE
+,prol.id
+,C_NUM_PROL
+,C_LIST_TUNE_STEPS
+,C_PROL_BEGIN
+,C_PROL_END
+,prol.c_SHB_CR_RT_KIND
+,agr.id
+HAVING COUNT(DISTINCT(arc.C_VAL_SIMPLE_PRC))>1
+),
+
+---Ограничение 9
+/*
+CASE WHEN  EXISTS(SELECT prol(1) in :: [PROL_CONTRACT],
+(:: [CR_AGR_CH_PR_SCH] all : agr),
+(:: [CR_AGR_RATES] all : rat),
+(:: [ARC_SCH_PRC] all : arc) all
+WHERE
+arc.[VAL_SIMPLE_PRC]<>0
+AND arc.[DATE_END] is not null
+AND rat.[IS_NEW_RATE]=1
+AND prol%collection(true) = A.[list_prol]
+AND prol.[CH_PRC_SCHEMES] = agr%collection(true)
+AND agr.[HIST_RATES]= rat%collection(true)
+AND rat.[rate]=arc%id) THEN 'Ставка будущей датой' END
+*/
+
+Ogr9FutureRate as (
+SELECT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+,agr.id ID_AGR
+,'Ставка в будущем'   Вид_Ограничения
+FROM z#PR_CRED cr
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#CR_AGR_CH_PR_SCH agr ON prol.C_CH_PRC_SCHEMES = agr.collection_id
+INNER JOIN z#CR_AGR_RATES rat  ON agr.C_HIST_RATES = rat.Collection_id
+INNER JOIN z#ARC_SCH_PRC arc ON rat.c_rate=arc.id
+WHERE
+arc.C_VAL_SIMPLE_PRC<>0
+
+--AND arc.C_DATE_BEG-1 = lag(arc.C_DATE_END,1) OVER (PARTITION BY rat.id)
+AND rat.C_IS_NEW_RATE=1
+AND prol.c_SHB_CR_RT_DATE<arc.C_DATE_BEG
+AND prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+AND prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+),
+/*
+Ogr9FutureRate as (
+SELECT
+cr.ID ID_КД
+,cr.C_NUM_DOG Номер_договора
+,prol.c_SHB_CR_RT_DATE Дата_Реструктуризации
+,prol.id ID_ДС
+,C_NUM_PROL Номер_ДС
+,C_LIST_TUNE_STEPS Шаг_Реструктуризации
+,C_PROL_BEGIN Дата_вступления_в_силу_ДС
+,C_PROL_END Дата_окончания_ДС
+,prol.c_SHB_CR_RT_KIND Предыдущая_дата_окончания_договора_ДС
+,agr.id ID_AGR
+,'Ставка в будущем'   Вид_Ограничения
+FROM z#PR_CRED cr
+INNER JOIN z#prol_contract prol ON prol.collection_id = cr.c_list_prol
+INNER JOIN z#CR_AGR_CH_PR_SCH agr ON prol.C_CH_PRC_SCHEMES = agr.collection_id
+INNER JOIN z#CR_AGR_RATES rat  ON agr.C_HIST_RATES = rat.Collection_id
+INNER JOIN z#ARC_SCH_PRC arc ON rat.c_rate=arc.id
+WHERE
+rat.C_IS_NEW_RATE=1
+AND arc.C_VAL_SIMPLE_PRC=0
+AND prol.c_SHB_CR_RT_DATE <arc.C_DATE_BEG
+AND prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+AND prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+),
+*/
+
+
+
+
+--Ogr13 Ограничение 13 Установка первого процентного периода подготовлено
+--241800/0224-3 пример
+
+Ogr13UstPPP as(
+SELECT DISTINCT cr.id as cr_id	,
+                   cr.c_num_dog	,
+                   br.c_code	,
+                   prol.c_SHB_CR_RT_DATE	,
+                   cr_stat.c_NAME as cr_st	,
+                   prol.id as "ID_ДС"	,
+                   prol.c_num_prol	,
+                   prol_stat.c_NAME as prol_st	,
+                   prol.C_ADD_AGREEMENT	,
+                   prol.C_CORRECTION	,
+                   prol.C_CHANGES	,
+                   prol.C_PROL_BEGIN	,
+                   prol.c_PROL_END	,
+                   prol.c_LAST_DATE_ENDING	,
+                   prol.c_SHB_CR_RT_KIND	,
+                   prol.c_LIST_TUNE_STEPS
+FROM z#pr_cred cr	,
+z#product p	,
+z#branch br	,
+z#com_status_prd cr_stat	,
+z#com_status_prd prol_stat	,
+z#prol_contract prol	,
+z#CR_AGR_PR_DEBT CAPD	,
+z#CR_AGR_PR_POINT CAPP
+        INNER  JOIN z#PR_POINT PRPNew ON CAPP.C_NEW_POINT=prpNew.id
+       WHERE  cr.id = p.id
+     AND cr.c_filial = br.id
+     --AND cr.id=361347701368
+     AND prol.collection_id = cr.c_list_prol
+     AND p.c_COM_STATUS = cr_stat.id
+     AND prol.c_COM_STATUS = prol_stat.id
+     AND prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+     AND prol.c_SHB_CR_RT_DATE < to_date('01/05/2025')
+       AND CAPD.C_PROL=prol.id
+       AND CAPD.C_VID_DEBT IN (1984123,1984128, 29999810)
+        AND CAPD.C_POINTS=CAPP.COLLECTION_ID
+        AND PRPNew.C_KIND IN (2,4,6)
+
+),
+
+--Ogr14 Ограничение 14 оформление нецелевой части транша с датой свойства
+--240200/0009-1 240200/0009-1_Прол1
+--'240700/0013-3%|246800/0011-2%|223200/0270-24%|241400/0014-10%|240200/0012-1%|240200/0009-1%|230700/0013-56%|241300/0068-4%|247100/0011-1%|220600/0023-1%|212500/0176-23%|220600/0105-27%|230700/0014-20%|240916/0075-4%|243200/0088-3%|234100/0048-6%|230200
+
+OGR14OformNeCel as (SELECT DISTINCT cr.id as cr_id	,
+                   cr.c_num_dog	,
+                   br.c_code	,
+                   prol.c_SHB_CR_RT_DATE	,
+                   cr_stat.c_NAME as cr_st	,
+                   prol.id as "ID_ДС"	,
+                   prol.c_num_prol	,
+                   prol_stat.c_NAME as prol_st	,
+                   prol.C_ADD_AGREEMENT	,
+                   prol.C_CORRECTION	,
+                   prol.C_CHANGES	,
+                   prol.C_PROL_BEGIN	,
+                   prol.c_PROL_END	,
+                   prol.c_LAST_DATE_ENDING	,
+                   prol.c_SHB_CR_RT_KIND	,
+                   prol.c_LIST_TUNE_STEPS	,
+                   pr.c_DATE_BEG	,
+                   pr.C_DATE_END
+   FROM z#pr_cred cr	,
+        z#product p	,
+        z#branch br	,
+        z#PROPERTIES PR	,
+        z#com_status_prd cr_stat	,
+        z#com_status_prd prol_stat	,
+        z#prol_contract prol		,
+        z#SHB_CR_TRNS SCT
+       WHERE  cr.id = p.id
+     AND Lower(SCT.C_NUM_DOG) like '%прол%'
+     AND cr.c_filial = br.id
+	 --AND cr.id=361347701368
+     AND cr.C_PROPERTIES = pr.collection_ID
+     AND pr.C_GROUP_PROP=624458483028
+     AND prol.collection_id = cr.c_list_prol
+     AND p.c_COM_STATUS = cr_stat.id
+     AND prol.c_COM_STATUS = prol_stat.id
+     AND prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+     AND prol.c_SHB_CR_RT_DATE < to_date ('01/01/2025')
+     AND prol.id=SCT.C_PROL
+
+),
+
+--Ogr15 Ограничение 15 отложенная комиссия в допнике
+--794169672100 - ДС, 4121713323-КД
+Ogr15Otlkom as (SELECT DISTINCT cr.id as cr_id,
+                   cr.c_num_dog,
+                   br.c_code,
+                   prol.c_SHB_CR_RT_DATE,
+                   cr_stat.c_NAME as cr_st,
+                   prol.id as "ID_ДС",
+                   prol.c_num_prol,
+                   prol_stat.c_NAME as prol_st,
+                   prol.C_ADD_AGREEMENT,
+                   prol.C_CORRECTION,
+                   prol.C_CHANGES,
+                   prol.C_PROL_BEGIN,
+                   prol.c_PROL_END,
+                   prol.c_LAST_DATE_ENDING,
+                   prol.c_SHB_CR_RT_KIND,
+                   prol.c_LIST_TUNE_STEPS
+FROM z#pr_cred cr,
+z#product p,
+z#branch br,
+z#com_status_prd cr_stat,
+z#com_status_prd prol_stat,
+z#prol_contract prol,
+z#CR_AGR_PR_DEBT CAPD
+       WHERE  cr.id = p.id
+     AND cr.c_filial = br.id
+     --AND cr.id=361347701368
+     AND prol.collection_id = cr.c_list_prol
+     AND p.c_COM_STATUS = cr_stat.id
+     AND prol.c_COM_STATUS = prol_stat.id
+     AND prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+     AND prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+       AND CAPD.C_PROL=prol.id
+       AND CAPD.C_VID_DEBT IN (1405075590)
+       ),
+
+  OGR17PlavRate as (
+ SELECT distinct
+prol.id as "ID_ДС"
+,prol.C_PROL_BEGIN
+,prol.C_SHB_CR_RT_DATE
+,prol.C_LIST_TUNE_STEPS
+FROM z#PR_CRED pr
+INNER JOIN z#prol_contract prol on prol.collection_id=pr.C_list_prol
+where
+prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+AND prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+AND prol.C_LIST_TUNE_STEPS like '%РСХБ_ИЗМЕНЕНИЕ_ПЛАВ_СТАВ%'
+),
+
+
+
+KEYRATE as (
+SELECT distinct
+Coalesce(TR.ID,CR.ID) as ID
+FROM z#PR_CRED CR
+INNER JOIN z#PROPERTIES PR on PR.COLLECTION_ID = CR.C_PROPERTIES
+LEFT JOIN z#PR_CRED TR on coalesce(TR.C_HIGH_LEVEL_CR,TR.ID)=CR.ID
+INNER JOIN z#PRODUCT P on P.id=CR.id
+where
+(PR.C_GROUP_PROP IN (3225836640,3225836639)
+AND ((PR.C_GROUP_PROP=3225836640
+AND PR.C_DATE_END is null
+AND PR.C_STR is not null)
+OR (PR.C_GROUP_PROP = 3225836639
+AND PR.C_BOOL = 1)))
+AND (P.C_DATE_CLOSE > to_date('31.07.2024') OR P.C_DATE_CLOSE is null)
+AND P.CLASS_ID IN ('KRED_CORP','OVERDRAFTS')
+--AND CR.C_NUM_DOG like '%240300/0058%'
+),
+
+
+Treb8107 as (
+SELECT
+RTR.ID,
+C_CRED,
+                   prol.id pr_id,
+                   c_num_prol ,
+                   prol_stat.c_NAME ,
+                   C_ADD_AGREEMENT ,
+                   C_CORRECTION  ,
+                   C_CHANGES ,
+                   C_PROL_BEGIN ,
+                   c_PROL_END ,
+                   c_LAST_DATE_ENDING ,
+                   c_SHB_CR_RT_KIND ,
+                   c_LIST_TUNE_STEPS
+FROM
+z#RSB_TREB_RESTR RTR
+INNER JOIN z#RSB_RESTR_PROL RRP ON rrp.collection_id = rtr.c_list_prol
+INNER JOIN z#prol_contract prol ON prol.id = rrp.c_prol_contract
+INNER JOIN z#com_status_prd prol_stat ON prol.c_COM_STATUS = prol_stat.id
+WHERE
+C_DATE_IMP>= to_date('01/05/2025')
+and C_DATE_IMP<to_date('01/06/2025')
+),
+
+
+
+TECHUSER as(SELECT
+a1.id HIST_ID,
+a1.collection_id HIST_COLLECTION,
+a1.C_RESUME,
+a1.C_PARAM_FOR_PLAN histparam,
+a3.C_PARAM_FOR_PLAN crparam,
+a2.C_NAME C_NAME,
+a3.id CR_ID,
+a3.c_num_dog,
+a3.c_list_prol,
+a4.collection_id PROL_COLLECTION,
+a4.id PR_ID,
+a4.C_NUM_PROL
+--1 as TechTest
+FROM
+Z#PLAN_HIST a1
+LEFT JOIN Z#USER a2 on a1.C_USER_MODIF=a2.id
+LEFT JOIN Z#PR_CRED a3 on  a1.Collection_ID=a3.C_PLAN_HIST
+LEFT JOIN Z#Prol_Contract a4 on a3.c_list_prol=a4.collection_id and SUBSTR(a1.C_RESUME,19,200)=a4.C_NUM_PROL
+WHERE
+LOWER(a1.C_RESUME) like '%доп%соглашение%'
+AND LOWER(a2.C_Name) like '%тех%пользовател%'
+),
+
+
+cnt AS
+  (SELECT DISTINCT cr.id as cr_id,
+                   cr.c_num_dog,
+                   p.class_id,
+                   kc.c_name,
+                   br.c_code,
+                   prol.c_SHB_CR_RT_DATE,
+                   prol.C_RSB_CONCL_DATE,
+                   cr_stat.c_NAME as cr_st,
+                   prol.id as pr_id,
+                   prol.c_num_prol,
+                   prol_stat.c_NAME as prol_st,
+                   prol.C_ADD_AGREEMENT,
+                   prol.C_CORRECTION,
+                   prol.C_CHANGES,
+                   prol.C_PROL_BEGIN,
+                   prol.c_PROL_END,
+                   prol.c_LAST_DATE_ENDING,
+                   prol.c_SHB_CR_RT_KIND,
+                   prol.c_LIST_TUNE_STEPS,
+                  ListAgg(VDE.C_NAME,', ')
+                  within group (order by prol.id) вид_задолженности
+   FROM z#pr_cred cr,
+        z#product p,
+        z#branch br,
+        z#kind_credits kc,
+        z#com_status_prd cr_stat,
+        z#com_status_prd prol_stat,
+        z#prol_contract prol
+		LEFT JOIN z#CR_AGR_CH_PR_SCH AGR ON AGR.Collection_id=prol.C_CH_PRC_SCHEMES
+        LEFT JOIN z#VID_DEBT VDE ON AGR.C_DEBT=VDE.ID
+   WHERE
+     cr.id = p.id
+     AND cr.c_filial = br.id
+	 AND cr.c_kind_credit=kc.id
+     AND (p.c_date_close IS NULL
+           OR p.c_date_close > prol.c_SHB_CR_RT_DATE)
+     AND prol.collection_id = cr.c_list_prol
+     AND p.c_COM_STATUS = cr_stat.id
+     AND prol.c_COM_STATUS = prol_stat.id
+     AND prol.c_SHB_CR_RT_DATE >= to_date('01/05/2025')
+     AND prol.c_SHB_CR_RT_DATE < to_date('01/06/2025')
+     GROUP BY cr.id ,
+                   cr.c_num_dog,
+                   br.c_code,
+                   kc.c_name,
+                   p.class_id,
+                   prol.c_SHB_CR_RT_DATE,
+                   prol.C_RSB_CONCL_DATE,
+                   cr_stat.c_NAME,
+                   prol.id,
+                   prol.c_num_prol,
+                   prol_stat.c_NAME ,
+                   prol.C_ADD_AGREEMENT,
+                   prol.C_CORRECTION,
+                   prol.C_CHANGES,
+                   prol.C_PROL_BEGIN,
+                   prol.c_PROL_END,
+                   prol.c_LAST_DATE_ENDING,
+                   prol.c_SHB_CR_RT_KIND,
+                   prol.c_LIST_TUNE_STEPS),
+
+
+
+Itog AS (
+SELECT cr_id as "ID КД",
+                   c_num_dog "Номер договора",
+                   class_id "Класс КД",
+                   c_name "Вид кредита",
+                   c_code "Код филиала",
+                   c_SHB_CR_RT_DATE "Дата реструктуризации",
+                   C_RSB_CONCL_DATE "Дата заключения ДС",
+                   cr_st "Статус КД",
+                   pr_id "ID ДС",
+                   c_num_prol "Номер ДС",
+                   prol_st "Статус ДС" ,
+                   C_ADD_AGREEMENT "Прол." ,
+                   C_CORRECTION "Корректировка данных" ,
+                   C_CHANGES "Изменение условий договора",
+                   C_PROL_BEGIN "Дата вступления в силу ДС",
+                   c_PROL_END "Дата окончания ДС",
+                   c_LAST_DATE_ENDING "Предыдущая дата окончания договора ДС",
+                   c_SHB_CR_RT_KIND "Вид реструктуризации",
+                   c_LIST_TUNE_STEPS "Шаг реструктуризации",
+                   вид_задолженности "Вид задолженности",
+                    '+' "Вид реестра"
+FROM cnt
+WHERE EXISTS
+    (SELECT 1
+     FROM z#vid_restr_hist vid
+     WHERE vid.c_agreement = pr_id )
+UNION
+SELECT cr_id as "ID КД",
+                   c_num_dog "Номер договора",
+                   class_id "Класс КД",
+                   c_name "Вид кредита",
+                   c_code "Код филиала",
+                   c_SHB_CR_RT_DATE "Дата реструктуризации",
+                   C_RSB_CONCL_DATE "Дата заключения ДС",
+                   cr_st "Статус КД",
+                   pr_id "ID ДС",
+                   c_num_prol "Номер ДС",
+                   prol_st "Статус ДС" ,
+                   C_ADD_AGREEMENT "Прол." ,
+                   C_CORRECTION "Корректировка данных" ,
+                   C_CHANGES "Изменение условий договора",
+                   C_PROL_BEGIN "Дата вступления в силу ДС",
+                   c_PROL_END "Дата окончания ДС",
+                   c_LAST_DATE_ENDING "Предыдущая дата окончания договора ДС",
+                   c_SHB_CR_RT_KIND "Вид реструктуризации",
+                   c_LIST_TUNE_STEPS "Шаг реструктуризации",
+                   вид_задолженности "Вид задолженности",
+       '-' "Вид реестра"
+FROM cnt
+WHERE NOT EXISTS
+    (SELECT 1
+     FROM z#vid_restr_hist vid
+     WHERE vid.c_agreement = pr_id ))
+
+	 SELECT distinct "ID КД",
+                   "Номер договора",
+                   "Класс КД",
+                   "Вид кредита",
+                   "Код филиала",
+                   "Дата реструктуризации",
+                   "Дата заключения ДС",
+                   "Статус КД",
+                   "ID ДС",
+                   "Номер ДС",
+                   "Статус ДС" ,
+                   "Прол." ,
+                   "Корректировка данных" ,
+                   "Изменение условий договора",
+                   "Дата вступления в силу ДС",
+                   "Дата окончания ДС",
+                   "Предыдущая дата окончания договора ДС",
+                   "Вид реструктуризации",
+                   "Шаг реструктуризации",
+                   "Вид задолженности",
+                   "Вид реестра",
+                   Tr.pr_id "ID доп. соглашения (требования)",
+                   Ogr1.ID_ДС "Огр1 Отсрочка Гашений",
+                   Ogr2.ID_ДС "Огр2 106 ФЗ",
+                   Ogr3.ID_ДС "Огр3 Дата начала планирования",
+                   Ogr4.ID_ДС "Огр4 История планирования",
+                   Ogr5.ID_ДС "Огр5 Конец договора",
+                   Ogr6.ID_ДС "Огр6 График ссудной задолженности",
+                   Ogr7.ID_ДС "Огр7 Капитализированные проценты",
+                   Ogr8.ID_ДС "Огр8 Уникальные ставки в истории ставок",
+                   Ogr9.ID_ДС "Огр9 Ставка будущей датой",
+                   Ogr13.ID_ДС "Огр13 Установка первого процентного периода",
+                   Ogr14.ID_ДС "Огр14 Оформление нецелевой части транша",
+                   Ogr15.ID_ДС "Огр15 Отложенная комиссия в дополнительном соглашении",
+                   Ogr17.ID_ДС "Огр17 Изменение плавающей стваки",
+
+                   KR.ID "Договора КС Июль",
+                   DSH.ID_ДС "ДС Выходного дня",
+                   CASE WHEN COUNT(DOSR.ID_ДС)>0 THEN 'Да' ELSE 'Нет' END AS "Заявка на досрочное погашению",
+                   MAX(DOSR.C_PROL_BEGIN) "Ближайшая дата вступления в силу досрочного погашения",
+                   TU.PR_ID "ID доп. соглашения Тех Пользователь",
+                   TU.C_NAME "Тех Пользователь"
+                   FROM Itog It
+                   LEFT JOIN Treb8107 Tr ON Tr.pr_id=It."ID ДС"
+                   LEFT JOIN Ogr1OtsrGash Ogr1 ON Ogr1.ID_ДС=It."ID ДС"
+                   LEFT JOIN Ogr2106PHZ Ogr2 ON Ogr2.ID_ДС=It."ID ДС"
+                   LEFT JOIN Ogr3DataStartOfPlaning Ogr3 ON Ogr3.ID_ДС=It."ID ДС"
+                   LEFT JOIN Ogr4HistoryRulesPlaning Ogr4 ON Ogr4.ID_ДС=It."ID ДС"
+                   LEFT JOIN Ogr5EndofDog Ogr5 ON Ogr5.ID_ДС=It."ID ДС"
+                   LEFT JOIN Ogr6GraphSsudDolg Ogr6 ON Ogr6.ID_ДС=It."ID ДС"
+                   LEFT JOIN Ogr7CapitalizedPrec Ogr7 ON Ogr7.ID_ДС=It."ID ДС"
+                   LEFT JOIN Ogr8CRAGRRATES Ogr8 ON Ogr8.ID_ДС=It."ID ДС"
+
+
+                   LEFT JOIN Ogr9FutureRate Ogr9 ON Ogr9.ID_ДС=It."ID ДС"
+
+
+                   --Ogr13UstPPP OGR14OformNeCel Ogr15Otlkom
+                   LEFT JOIN Ogr13UstPPP Ogr13 on Ogr13.ID_ДС=It."ID ДС"
+                   LEFT JOIN OGR14OformNeCel Ogr14 on Ogr14.ID_ДС=It."ID ДС"
+                   LEFT JOIN Ogr15Otlkom Ogr15 on Ogr15.ID_ДС=It."ID ДС"
+
+                   LEFT JOIN OGR17PlavRate Ogr17 on Ogr17.ID_ДС=It."ID ДС"
+
+                   LEFT JOIN DSHOLIDAY DSH ON DSH.ID_ДС=It."ID ДС"
+                   LEFT JOIN DOSROCH DOSR ON DOSR.ID_КД=It."ID КД"
+
+                    LEFT JOIN KEYRATE KR ON KR.ID=It."ID КД" AND IT."Дата реструктуризации" BETWEEN to_date('29.07.2024') AND to_date('31.07.2024')
+                   LEFT JOIN TECHUSER TU ON TU.PR_ID=It."ID ДС"
+                    GROUP BY
+                    "ID КД",
+                   "Номер договора",
+                   "Класс КД",
+                   "Вид кредита",
+                   "Код филиала",
+                   "Дата реструктуризации",
+                   "Дата заключения ДС",
+                   "Статус КД",
+                   "ID ДС",
+                   "Номер ДС",
+                   "Статус ДС" ,
+                   "Прол." ,
+                   "Корректировка данных" ,
+                   "Изменение условий договора",
+                   "Дата вступления в силу ДС",
+                   "Дата окончания ДС",
+                   "Предыдущая дата окончания договора ДС",
+                   "Вид реструктуризации",
+                   "Шаг реструктуризации",
+                   "Вид задолженности",
+                   "Вид реестра",
+                   Tr.pr_id,
+                   Ogr1.ID_ДС,
+                   Ogr2.ID_ДС,
+                   Ogr3.ID_ДС,
+                   Ogr4.ID_ДС,
+                   Ogr5.ID_ДС,
+                   Ogr6.ID_ДС,
+                   Ogr7.ID_ДС,
+                   Ogr8.ID_ДС,
+                    Ogr9.ID_ДС ,
+                    Ogr13.ID_ДС,
+                   Ogr14.ID_ДС,
+                   Ogr15.ID_ДС,
+                   Ogr15.ID_ДС,
+                    Ogr17.ID_ДС,
+                   DSH.ID_ДС,
+                   KR.ID ,
+                   TU.PR_ID,
+                   TU.C_NAME
